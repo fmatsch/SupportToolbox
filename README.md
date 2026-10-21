@@ -4,7 +4,7 @@ Kleines Support-Tool für Windows-Anwender: Der Kunde startet es per Doppelklick
 
 ![Screenshot](docs/screenshot.png)
 
-**Webseite:** https://fmatsch.github.io/SupportToolbox/
+**Webseite:** https://fmatsch.ist/SupportToolbox/
 
 ## Funktionen
 
