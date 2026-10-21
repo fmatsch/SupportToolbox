@@ -21,7 +21,7 @@ $ProgressPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:Version = '1.1.0'
+$script:Version = '1.1.1'
 $script:SelfPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $script:IsExe = $script:SelfPath -notmatch '(?i)\\(powershell|pwsh)\.exe$'
 $script:Root = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $script:SelfPath }
@@ -31,8 +31,8 @@ $script:IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.Wind
 $script:Config = @{
     CompanyName  = 'IT-Support'
     SupportMail  = 'support@example.com'
-    TestHost     = 'www.microsoft.com'
-    TestPort     = 443
+    TestHost     = ''
+    TestPort     = 445
     NetworkDrives = @()   # optional: @{ Letter = 'Z'; Path = '\\server\share' }
 }
 $cfgFile = Join-Path $script:Root 'config.json'
@@ -311,11 +311,26 @@ function Invoke-IpRenew {
     $l -join "`r`n"
 }
 
-function Invoke-ConnectionTest([string]$Target, [int]$Port) {
+function Get-ActiveDnsServers {
+    try {
+        $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+        if ($cfg) { return @($cfg.DNSServer | Where-Object { $_.AddressFamily -eq 2 } | ForEach-Object { $_.ServerAddresses }) }
+    } catch { }
+    return @()
+}
+
+function Invoke-ConnectionTest([string]$Target, [string]$PortText) {
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        return "Bitte oben den Namen oder die IP-Adresse des Servers eingeben (z. B. server01 oder 192.168.1.10)."
+    }
+    $port = 0
+    $hasPort = [int]::TryParse($PortText, [ref]$port) -and $port -gt 0 -and $port -lt 65536
     $l = New-Object System.Collections.Generic.List[string]
-    $l.Add("=== VERBINDUNGSTEST zu $Target (Port $Port) ===")
+    $l.Add("=== VERBINDUNGSTEST zu $Target$(if ($hasPort) { " (Port $port)" }) ===")
     $l.Add('')
     $fail = $null
+
+    # 1. Eigenes Netzwerk
     $gw = Get-DefaultGateway
     if ($gw) {
         $p = Test-PingHost $gw 3
@@ -323,30 +338,59 @@ function Invoke-ConnectionTest([string]$Target, [int]$Port) {
         else { $l.Add("[FEHL] 1. Router/Gateway $gw antwortet nicht"); $fail = 'lokal' }
     } else { $l.Add('[FEHL] 1. Kein Standardgateway - keine aktive Netzwerkverbindung'); $fail = 'lokal' }
 
-    $p = Test-PingHost '1.1.1.1' 3
-    if ($p.Received -gt 0) { $l.Add("[OK]   2. Internet (1.1.1.1) erreichbar ($($p.AvgMs) ms)") }
-    else { $l.Add('[FEHL] 2. Internet (1.1.1.1) nicht erreichbar'); if (-not $fail) { $fail = 'internet' } }
+    # 2. DNS-Server dieser Verbindung (bei internen Servern meist der lokale DNS/Domänencontroller)
+    $dnsServers = @(Get-ActiveDnsServers)
+    $dnsOk = 0
+    if ($dnsServers.Count -eq 0) { $l.Add('[FEHL] 2. Kein DNS-Server eingetragen') }
+    foreach ($d in $dnsServers) {
+        $p = Test-PingHost $d 2
+        if ($p.Received -gt 0) { $dnsOk++; $l.Add("[OK]   2. DNS-Server $d erreichbar ($($p.AvgMs) ms)") }
+        else { $l.Add("[INFO] 2. DNS-Server $d antwortet nicht auf Ping (kann auch nur blockiert sein)") }
+    }
 
+    # 3. Namensauflösung
+    $ipLiteral = $null
+    $isIp = [System.Net.IPAddress]::TryParse($Target, [ref]$ipLiteral)
     $ips = $null
-    try { $ips = [System.Net.Dns]::GetHostAddresses($Target) } catch { }
-    if ($ips) { $l.Add("[OK]   3. Namensauflösung: $Target = $(($ips | Select-Object -First 3 | ForEach-Object { $_.ToString() }) -join ', ')") }
-    else { $l.Add("[FEHL] 3. Name '$Target' konnte nicht aufgelöst werden"); if (-not $fail) { $fail = 'dns' } }
+    if ($isIp) {
+        $ips = @($ipLiteral)
+        $l.Add("[INFO] 3. $Target ist eine IP-Adresse - keine Namensauflösung nötig")
+    } else {
+        try { $ips = [System.Net.Dns]::GetHostAddresses($Target) } catch { }
+        if ($ips) { $l.Add("[OK]   3. Namensauflösung: $Target = $(($ips | Select-Object -First 3 | ForEach-Object { $_.ToString() }) -join ', ')") }
+        else { $l.Add("[FEHL] 3. Name '$Target' konnte nicht aufgelöst werden"); if (-not $fail) { $fail = 'dns' } }
+    }
 
+    # 4./5. Server selbst
+    $pingOk = $false
     if ($ips) {
         $p = Test-PingHost $Target 4
-        if ($p.Received -gt 0) { $l.Add("[OK]   4. Ping zu $Target ($($p.Received)/$($p.Sent) Antworten, $($p.AvgMs) ms)") }
-        else { $l.Add("[INFO] 4. Ping zu $Target ohne Antwort (manche Server blockieren Ping)") }
-        if (Test-TcpPort $Target $Port) { $l.Add("[OK]   5. Port $Port auf $Target ist offen") }
-        else { $l.Add("[FEHL] 5. Port $Port auf $Target nicht erreichbar"); if (-not $fail) { $fail = 'dienst' } }
+        if ($p.Received -gt 0) { $pingOk = $true; $l.Add("[OK]   4. Ping zu $Target ($($p.Received)/$($p.Sent) Antworten, $($p.AvgMs) ms)") }
+        else { $l.Add("[INFO] 4. Ping zu $Target ohne Antwort (Server oder Firewall blockiert evtl. Ping)") }
+        if ($hasPort) {
+            if (Test-TcpPort $Target $port) { $l.Add("[OK]   5. Port $port auf $Target ist offen") }
+            else { $l.Add("[FEHL] 5. Port $port auf $Target nicht erreichbar"); if (-not $fail) { $fail = 'dienst' } }
+        } elseif (-not $pingOk -and -not $fail) { $fail = 'ping' }
     }
+
+    # 6. Internet nur zur Info - für interne Server nicht relevant
+    $p = Test-PingHost '1.1.1.1' 2
+    if ($p.Received -gt 0) { $l.Add('[INFO] 6. Internet (1.1.1.1) erreichbar - für interne Server nicht erforderlich') }
+    else { $l.Add('[INFO] 6. Internet (1.1.1.1) nicht erreichbar - für interne Server nicht erforderlich') }
+
     $l.Add('')
     $l.Add('=== ERGEBNIS ===')
     switch ($fail) {
-        'lokal'    { $l.Add('Der PC hat keine funktionierende Verbindung zum eigenen Netzwerk. Kabel/WLAN prüfen, WLAN aus-/einschalten oder Toolbox: "IP erneuern".') }
-        'internet' { $l.Add('Das lokale Netzwerk geht, aber das Internet nicht. Router neu starten (30 Sek. vom Strom), sonst Störung beim Provider.') }
-        'dns'      { $l.Add('Internet geht, aber Namen werden nicht aufgelöst (DNS). Toolbox: "IP erneuern"; bei VPN: neu verbinden.') }
-        'dienst'   { $l.Add("Der Server ist im Netz, aber der Dienst auf Port $Port antwortet nicht. Server/Dienst gestört oder durch Firewall blockiert - bitte Support informieren.") }
-        default    { $l.Add('Alles in Ordnung - die Verbindung funktioniert.') }
+        'lokal' { $l.Add('Der PC hat keine funktionierende Verbindung zum eigenen Netzwerk. Kabel/WLAN prüfen, WLAN aus-/einschalten oder Toolbox: "IP erneuern".') }
+        'dns'   {
+            $l.Add("Der Name '$Target' wird vom DNS-Server ($($dnsServers -join ', ')) nicht gefunden.")
+            $l.Add('  - Name richtig geschrieben? Probeweise die IP-Adresse des Servers eintragen.')
+            $l.Add('  - Bei Homeoffice: VPN verbunden? Sonst kennt der PC interne Namen nicht.')
+            $l.Add('  - Toolbox: "IP erneuern"; sind feste DNS-Server eingetragen, "Auf DHCP umstellen".')
+        }
+        'dienst' { $l.Add("Der Server ist im Netz erreichbar, aber der Dienst auf Port $port antwortet nicht. Server/Dienst gestört oder durch Firewall blockiert - bitte Support informieren.") }
+        'ping'  { $l.Add('Der Name/die Adresse stimmt, aber der Server antwortet nicht auf Ping. Ist er eingeschaltet? Ein Port (z. B. 445) angeben, um den Dienst direkt zu testen.') }
+        default { $l.Add('Alles in Ordnung - der Server ist erreichbar.') }
     }
     $l -join "`r`n"
 }
@@ -429,7 +473,14 @@ function Get-IpModeText {
         $gw = (Get-NetRoute -InterfaceIndex $ad.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | ForEach-Object { $_.NextHop }) -join ', '
         $dns = (Get-DnsClientServerAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses }) -join ', '
         $l.Add((Format-Row '  Gateway' $gw))
-        $l.Add((Format-Row '  DNS-Server' $dns))
+        $isDhcp = ($if.Dhcp -eq 'Enabled' -and $manual.Count -eq 0)
+        $l.Add((Format-Row '  DNS-Server' ($dns + $(if ($isDhcp -and $dns) { '  (vom DHCP-Server)' } else { '' }))))
+        $cim = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$($ad.ifIndex)" -ErrorAction SilentlyContinue
+        if ($cim -and $cim.DNSDomain) { $l.Add((Format-Row '  DNS-Suffix' $cim.DNSDomain)) }
+        if ($cim -and $cim.DHCPEnabled -and $cim.DHCPServer) {
+            $l.Add((Format-Row '  DHCP-Server' $cim.DHCPServer))
+            if ($cim.DHCPLeaseExpires) { $l.Add((Format-Row '  Lease gültig bis' $cim.DHCPLeaseExpires.ToString('dd.MM.yyyy HH:mm'))) }
+        }
     }
     $l -join "`r`n"
 }
@@ -654,7 +705,7 @@ $script:Form = New-Object System.Windows.Forms.Form
 $f = $script:Form
 $f.Text = "$($script:Config.CompanyName) - SupportToolbox $script:Version"
 $f.StartPosition = 'CenterScreen'
-$f.Size = New-Object System.Drawing.Size(1080, 740)
+$f.Size = New-Object System.Drawing.Size(1080, 800)
 $f.MinimumSize = New-Object System.Drawing.Size(900, 560)
 $f.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 
@@ -665,11 +716,12 @@ $script:Txt.BackColor = [System.Drawing.Color]::White
 $script:Txt.Dock = 'Fill'
 
 $top = New-Object System.Windows.Forms.Panel; $top.Dock = 'Top'; $top.Height = 42
-$lbl = New-Object System.Windows.Forms.Label; $lbl.Text = 'Server / Adresse:'; $lbl.Location = '10,12'; $lbl.AutoSize = $true
+$lbl = New-Object System.Windows.Forms.Label; $lbl.Text = 'Interner Server:'; $lbl.Location = '10,12'; $lbl.AutoSize = $true
 $script:HostBox = New-Object System.Windows.Forms.TextBox; $script:HostBox.Location = '120,9'; $script:HostBox.Width = 260; $script:HostBox.Text = $script:Config.TestHost
 $lbl2 = New-Object System.Windows.Forms.Label; $lbl2.Text = 'Port:'; $lbl2.Location = '395,12'; $lbl2.AutoSize = $true
 $script:PortBox = New-Object System.Windows.Forms.TextBox; $script:PortBox.Location = '430,9'; $script:PortBox.Width = 60; $script:PortBox.Text = [string]$script:Config.TestPort
-$top.Controls.AddRange(@($lbl, $script:HostBox, $lbl2, $script:PortBox))
+$lbl3 = New-Object System.Windows.Forms.Label; $lbl3.Text = '(Port leer lassen = nur Ping)'; $lbl3.Location = '500,12'; $lbl3.AutoSize = $true; $lbl3.ForeColor = [System.Drawing.Color]::Gray
+$top.Controls.AddRange(@($lbl, $script:HostBox, $lbl2, $script:PortBox, $lbl3))
 
 $bottom = New-Object System.Windows.Forms.Panel; $bottom.Dock = 'Bottom'; $bottom.Height = 46
 function New-BottomButton([string]$Text, [int]$X, [int]$W, [scriptblock]$Click) {
@@ -684,8 +736,8 @@ New-BottomButton 'Als Datei speichern' 430 150 {
     [IO.File]::WriteAllText($p, $script:Txt.Text, (New-Object System.Text.UTF8Encoding($true)))
     $script:Status.Text = "Gespeichert: $p"
 }
-$script:Status = New-Object System.Windows.Forms.Label; $script:Status.AutoSize = $true; $script:Status.Anchor = 'Left,Bottom'; $script:Status.Location = '650,15'
-$adminText = if ($script:IsAdmin) { 'Administrator-Modus' } else { 'Standard-Modus (Admin-Funktionen gesperrt)' }
+$script:Status = New-Object System.Windows.Forms.Label; $script:Status.AutoSize = $true; $script:Status.Anchor = 'Left,Bottom'; $script:Status.Location = '620,15'
+$adminText = if ($script:IsAdmin) { 'Administrator-Modus' } else { 'Standard-Modus (kein Admin)' }
 $script:Status.Text = $adminText
 $bottom.Controls.Add($script:Status)
 
@@ -717,7 +769,7 @@ function New-Section([string]$Text) {
 }
 function New-ActionButton([string]$Text, [scriptblock]$Action, [switch]$Confirm, [string]$ConfirmText) {
     $b = New-Object System.Windows.Forms.Button
-    $b.Text = $Text; $b.Width = 222; $b.Height = 30; $b.TextAlign = 'MiddleLeft'
+    $b.Text = $Text; $b.Width = 222; $b.Height = 28; $b.TextAlign = 'MiddleLeft'
     $b.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
     $b.FlatStyle = 'Flat'; $b.BackColor = [System.Drawing.Color]::White; $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(200, 208, 220)
     $b.Tag = @{ Action = $Action; Confirm = [bool]$Confirm; ConfirmText = $ConfirmText }
@@ -741,8 +793,8 @@ New-ActionButton 'Kompletter Support-Bericht' { Get-SupportReportText }
 
 New-Section 'Netzwerk'
 New-ActionButton 'IP erneuern (Release/Renew)' { Invoke-IpRenew } -Confirm -ConfirmText 'Die Netzwerkverbindung wird kurz unterbrochen. Fortfahren?'
-New-ActionButton 'Verbindungstest zum Server' { Invoke-ConnectionTest $script:HostBox.Text.Trim() ([int]$script:PortBox.Text) }
-New-ActionButton 'Auf DHCP umstellen (IPv4 automatisch)' { Set-DhcpIPv4 } -Confirm -ConfirmText 'Feste IPv4-Einstellungen (IP, Gateway, DNS) werden auf automatisch (DHCP) umgestellt. Die alten Werte werden gesichert. Die Verbindung wird kurz unterbrochen. Fortfahren?'
+New-ActionButton 'Server-Verbindungstest' { Invoke-ConnectionTest $script:HostBox.Text.Trim() $script:PortBox.Text.Trim() }
+New-ActionButton 'Auf DHCP umstellen' { Set-DhcpIPv4 } -Confirm -ConfirmText 'Feste IPv4-Einstellungen (IP, Gateway, DNS) werden auf automatisch (DHCP) umgestellt. Die alten Werte werden gesichert. Die Verbindung wird kurz unterbrochen. Fortfahren?'
 New-ActionButton 'Internet-Speedtest' { Invoke-SpeedTest } -Confirm -ConfirmText 'Der Test dauert ca. 30 Sekunden und verbraucht etwa 20-100 MB Datenvolumen. Starten?'
 New-ActionButton 'WLAN auf Ethernet umstellen' { Switch-WifiToEthernet } -Confirm -ConfirmText 'Wenn ein Netzwerkkabel verbunden ist, wird das WLAN ausgeschaltet. Fortfahren?'
 New-ActionButton 'WLAN wieder einschalten' { Enable-Wifi }
