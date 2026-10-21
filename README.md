@@ -15,6 +15,8 @@ Kleines Support-Tool für Windows-Anwender: Der Kunde startet es per Doppelklick
 | | **Fehleranalyse + Tipps**: wertet die Fehler der letzten 14 Tage aus, erkennt bekannte Muster (Abstürze, Festplatte, Dienste, DNS, WLAN, Updates …) und gibt Hilfe zur Selbsthilfe; prüft zusätzlich Speicherplatz, Neustart-Bedarf, RAM, Defender |
 | | **Kompletter Support-Bericht** (alles zusammen) |
 | Netzwerk | **IP erneuern** (`ipconfig /release`, `/renew`, `/flushdns`) |
+| | **Auf DHCP umstellen**: feste IPv4-Einstellungen (IP, Gateway, DNS) mit einem Klick auf automatisch; alte Werte werden gesichert (Admin) |
+| | **Internet-Speedtest**: Download, Upload, Ping und Schwankung (Cloudflare), mit Einordnung und Tipps |
 | | **Verbindungstest** zu Server/Port mit Diagnose (Router → Internet → DNS → Ping → Port) |
 | | **WLAN auf Ethernet umstellen** (nur wenn Kabel verbunden ist) und wieder zurück |
 | | **Netzlaufwerke neu verbinden** (inkl. Erreichbarkeitsprüfung des Servers) |

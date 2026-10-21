@@ -21,7 +21,7 @@ $ProgressPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:Version = '1.0.0'
+$script:Version = '1.1.0'
 $script:SelfPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $script:IsExe = $script:SelfPath -notmatch '(?i)\\(powershell|pwsh)\.exe$'
 $script:Root = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $script:SelfPath }
@@ -413,6 +413,167 @@ function Connect-NetworkDrives {
     $l -join "`r`n"
 }
 
+# ---------------------------------------------------------------- 4b. IPv4 auf DHCP / Speedtest
+function Get-IpModeText {
+    $l = New-Object System.Collections.Generic.List[string]
+    $l.Add('=== AKTUELLE IPv4-EINSTELLUNGEN ===')
+    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
+    if ($adapters.Count -eq 0) { $l.Add('Keine aktive Netzwerkverbindung gefunden.'); return ($l -join "`r`n") }
+    foreach ($ad in $adapters) {
+        $if = Get-NetIPInterface -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $ips = @(Get-NetIPAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+        $manual = @($ips | Where-Object { $_.PrefixOrigin -eq 'Manual' })
+        $mode = if ($if.Dhcp -eq 'Enabled' -and $manual.Count -eq 0) { 'automatisch (DHCP)' } else { 'FESTE IP-ADRESSE' }
+        $l.Add((Format-Row $ad.Name $mode))
+        $l.Add((Format-Row '  IP-Adresse' (($ips | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)" }) -join ', ')))
+        $gw = (Get-NetRoute -InterfaceIndex $ad.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | ForEach-Object { $_.NextHop }) -join ', '
+        $dns = (Get-DnsClientServerAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses }) -join ', '
+        $l.Add((Format-Row '  Gateway' $gw))
+        $l.Add((Format-Row '  DNS-Server' $dns))
+    }
+    $l -join "`r`n"
+}
+
+function Set-DhcpIPv4 {
+    $status = Get-IpModeText
+    $a = Test-Admin 'IP-Einstellungen ändern'
+    if ($a -ne $true) { return "$status`r`n`r`n$a" }
+
+    $l = New-Object System.Collections.Generic.List[string]
+    $l.Add($status); $l.Add('')
+    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })
+    $changed = $false
+    foreach ($ad in $adapters) {
+        $idx = $ad.ifIndex
+        $if = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $manual = @(Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.PrefixOrigin -eq 'Manual' })
+        if ($if.Dhcp -eq 'Enabled' -and $manual.Count -eq 0) { $l.Add("[OK]   $($ad.Name): nutzt bereits DHCP - nichts geändert"); continue }
+        try {
+            # alte Werte sichern, falls man zurückstellen möchte
+            $dir = Join-Path $env:LOCALAPPDATA 'SupportToolbox'
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+            $backup = Join-Path $dir ('ip-backup_{0}_{1:yyyyMMdd_HHmmss}.txt' -f ($ad.Name -replace '[^\w\-]', '_'), (Get-Date))
+            $old = Get-IpModeText
+            Set-Content -Path $backup -Value $old -Encoding UTF8
+
+            Set-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -Dhcp Enabled
+            $manual | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+            Get-NetRoute -InterfaceIndex $idx -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Protocol -eq 'NetMgmt' } | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+            Set-DnsClientServerAddress -InterfaceIndex $idx -ResetServerAddresses
+            & ipconfig /renew "$($ad.Name)" 2>&1 | Out-Null
+            $l.Add("[OK]   $($ad.Name): auf DHCP umgestellt (alte Werte gesichert: $backup)")
+            $changed = $true
+        } catch {
+            $l.Add("[FEHL] $($ad.Name): $($_.Exception.Message)")
+        }
+    }
+    if ($changed) {
+        Start-Sleep -Seconds 4
+        $l.Add('')
+        $l.Add(((Get-IpModeText) -replace '=== AKTUELLE', '=== NEUE'))
+        $apipa = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '169.254.*' -and $_.InterfaceIndex -in $adapters.ifIndex })
+        if ($apipa.Count -gt 0) {
+            $l.Add('')
+            $l.Add('[!] Es wurde keine Adresse vom Router/DHCP-Server vergeben (169.254.x.x). Bitte Kabel/WLAN prüfen und nach einer Minute "IP erneuern" ausführen. Die alten Werte stehen in der Sicherungsdatei.')
+        } else {
+            $l.Add('')
+            $l.Add('[OK] Die Adresse wird jetzt automatisch vom Router vergeben.')
+        }
+    }
+    $l -join "`r`n"
+}
+
+function Invoke-SpeedTest {
+    Add-Type -AssemblyName System.Net.Http
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::DefaultConnectionLimit = 16
+    $base = 'https://speed.cloudflare.com'
+    $l = New-Object System.Collections.Generic.List[string]
+    $l.Add('=== INTERNET-SPEEDTEST (Server: Cloudflare) ===')
+
+    $cfg = Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+    $isWifi = $false
+    if ($cfg) {
+        $isWifi = ($cfg.NetAdapter.PhysicalMediaType -match '802\.11|Wireless') -or ($cfg.NetAdapter.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN')
+        $l.Add((Format-Row 'Verbindung' "$($cfg.InterfaceAlias) ($(if ($isWifi) { 'WLAN' } else { 'Kabel/sonstige' }))"))
+    }
+
+    # Latenz und Schwankung
+    $ping = New-Object System.Net.NetworkInformation.Ping
+    $t = @()
+    for ($i = 0; $i -lt 10; $i++) { try { $r = $ping.Send('1.1.1.1', 1500); if ($r.Status -eq 'Success') { $t += $r.RoundtripTime } } catch { } }
+    if ($t.Count -eq 0) { $l.Add('[FEHL] Keine Internetverbindung - Speedtest nicht möglich. Bitte zuerst "Verbindungstest" ausführen.'); return ($l -join "`r`n") }
+    $avg = ($t | Measure-Object -Average).Average
+    $jit = 0; if ($t.Count -gt 1) { $d = @(); for ($i = 1; $i -lt $t.Count; $i++) { $d += [math]::Abs($t[$i] - $t[$i - 1]) }; $jit = ($d | Measure-Object -Average).Average }
+    $l.Add((Format-Row 'Antwortzeit (Ping)' ('{0:N0} ms, Schwankung {1:N0} ms, Verlust {2} von 10' -f $avg, $jit, (10 - $t.Count))))
+
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(45)
+    $bytesTotal = 0
+    $streams = 4
+    try {
+        # Download: kleine Probe, danach Größe passend zur Leitung wählen (ca. 8 s)
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $b = $client.GetByteArrayAsync("$base/__down?bytes=2000000").Result
+        $sw.Stop(); $bytesTotal += $b.Length
+        $probe = $b.Length * 8 / 1e6 / [math]::Max(0.05, $sw.Elapsed.TotalSeconds)
+        $per = [int][math]::Min(50e6, [math]::Max(2e6, $probe * 1e6 / 8 * 8 / $streams))
+        $sw.Restart()
+        $tasks = @(1..$streams | ForEach-Object { $client.GetByteArrayAsync("$base/__down?bytes=$per") })
+        [void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$tasks)
+        $sw.Stop()
+        $got = ($tasks | ForEach-Object { $_.Result.Length } | Measure-Object -Sum).Sum
+        $bytesTotal += $got
+        $down = $got * 8 / 1e6 / $sw.Elapsed.TotalSeconds
+        $l.Add((Format-Row 'Download' ('{0:N1} Mbit/s' -f $down)))
+    } catch {
+        $l.Add("[FEHL] Download-Test fehlgeschlagen: $($_.Exception.InnerException.Message)$($_.Exception.Message)")
+        $down = $null
+    }
+
+    $up = $null
+    try {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $c = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, (New-Object byte[] 1000000))
+        [void]$client.PostAsync("$base/__up", $c).Result
+        $sw.Stop(); $bytesTotal += 1000000
+        $probe = 1e6 * 8 / 1e6 / [math]::Max(0.05, $sw.Elapsed.TotalSeconds)
+        $per = [int][math]::Min(25e6, [math]::Max(1e6, $probe * 1e6 / 8 * 8 / $streams))
+        $payloads = @(1..$streams | ForEach-Object { New-Object System.Net.Http.ByteArrayContent -ArgumentList (, (New-Object byte[] $per)) })
+        $sw.Restart()
+        $tasks = @($payloads | ForEach-Object { $client.PostAsync("$base/__up", $_) })
+        [void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$tasks)
+        $sw.Stop()
+        $bytesTotal += $per * $streams
+        $up = $per * $streams * 8 / 1e6 / $sw.Elapsed.TotalSeconds
+        $l.Add((Format-Row 'Upload' ('{0:N1} Mbit/s' -f $up)))
+    } catch {
+        $l.Add("[FEHL] Upload-Test fehlgeschlagen: $($_.Exception.InnerException.Message)$($_.Exception.Message)")
+    } finally { $client.Dispose() }
+
+    $l.Add('')
+    $l.Add('=== EINORDNUNG ===')
+    if ($null -ne $down) {
+        if     ($down -ge 100) { $l.Add('Sehr schnell: reicht für 4K-Streaming, große Downloads und mehrere Personen gleichzeitig.') }
+        elseif ($down -ge 25)  { $l.Add('Gut: HD-Streaming, Videokonferenzen und Homeoffice sind problemlos möglich.') }
+        elseif ($down -ge 10)  { $l.Add('Ausreichend für Surfen, E-Mail und eine Videokonferenz - bei mehreren Nutzern gleichzeitig kann es eng werden.') }
+        else                   { $l.Add('Langsam: Webseiten und Videos laden zäh. Siehe Tipps unten.') }
+        if ($avg -gt 80 -or $jit -gt 30) { $l.Add('Die Antwortzeit schwankt/ist hoch - das stört vor allem Videokonferenzen und Telefonie.') }
+        if ($down -lt 25 -or $avg -gt 80) {
+            $l.Add('')
+            $l.Add('TIPPS:')
+            if ($isWifi) { $l.Add('  - Sie sind per WLAN verbunden: näher zum Router gehen oder per Kabel verbinden (Toolbox: "WLAN auf Ethernet umstellen").') }
+            $l.Add('  - Andere Geräte/Downloads/Streams im Haus pausieren und den Test wiederholen.')
+            $l.Add('  - Router für 30 Sekunden vom Strom trennen und neu starten.')
+            $l.Add('  - Bleibt es langsam, Werte (Download/Upload/Ping) notieren und uns schicken - ggf. liegt es beim Internetanbieter.')
+        }
+    }
+    $l.Add('')
+    $l.Add(('Hinweis: Gemessen gegen Cloudflare, verbraucht ca. {0:N0} MB Datenvolumen. Werte können von anderen Messdiensten abweichen.' -f ($bytesTotal / 1e6)))
+    $l -join "`r`n"
+}
+
 # ---------------------------------------------------------------- 5. Screenshots
 function Save-Screenshot([int]$DelaySeconds) {
     $dir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'Support-Screenshots'
@@ -581,6 +742,8 @@ New-ActionButton 'Kompletter Support-Bericht' { Get-SupportReportText }
 New-Section 'Netzwerk'
 New-ActionButton 'IP erneuern (Release/Renew)' { Invoke-IpRenew } -Confirm -ConfirmText 'Die Netzwerkverbindung wird kurz unterbrochen. Fortfahren?'
 New-ActionButton 'Verbindungstest zum Server' { Invoke-ConnectionTest $script:HostBox.Text.Trim() ([int]$script:PortBox.Text) }
+New-ActionButton 'Auf DHCP umstellen (IPv4 automatisch)' { Set-DhcpIPv4 } -Confirm -ConfirmText 'Feste IPv4-Einstellungen (IP, Gateway, DNS) werden auf automatisch (DHCP) umgestellt. Die alten Werte werden gesichert. Die Verbindung wird kurz unterbrochen. Fortfahren?'
+New-ActionButton 'Internet-Speedtest' { Invoke-SpeedTest } -Confirm -ConfirmText 'Der Test dauert ca. 30 Sekunden und verbraucht etwa 20-100 MB Datenvolumen. Starten?'
 New-ActionButton 'WLAN auf Ethernet umstellen' { Switch-WifiToEthernet } -Confirm -ConfirmText 'Wenn ein Netzwerkkabel verbunden ist, wird das WLAN ausgeschaltet. Fortfahren?'
 New-ActionButton 'WLAN wieder einschalten' { Enable-Wifi }
 New-ActionButton 'Netzlaufwerke neu verbinden' { Connect-NetworkDrives }
