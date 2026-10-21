@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupportToolbox – Support-Tool für Windows</title>
+<meta name="description" content="Kleines Support-Tool für Windows: Computer-Daten, Fehleranalyse, Netzwerk-Reparatur, Verbindungstest, Netzlaufwerke und Screenshots per Klick.">
+<style>
+:root{--bg:#f6f8fb;--fg:#1c2430;--muted:#5b6778;--card:#fff;--line:#dde3ec;--accent:#0b63b6}
+@media (prefers-color-scheme:dark){:root{--bg:#10151c;--fg:#e6ebf2;--muted:#9aa7b8;--card:#18202a;--line:#2a3441;--accent:#5aa9f0}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:1000px;margin:0 auto;padding:0 20px}
+header{padding:64px 0 32px}
+h1{font-size:2.4rem;margin:0 0 8px}
+.lead{color:var(--muted);font-size:1.15rem;max-width:640px}
+.btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;margin:20px 10px 0 0}
+.btn.alt{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+img.shot{width:100%;max-width:1000px;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.12);margin:32px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+.card h3{margin:0 0 6px;font-size:1.05rem}
+.card p{margin:0;color:var(--muted);font-size:.95rem}
+h2{margin:48px 0 16px}
+ol li{margin:6px 0}
+code,pre{background:var(--card);border:1px solid var(--line);border-radius:6px}
+code{padding:1px 6px}
+pre{padding:14px;overflow:auto}
+footer{color:var(--muted);padding:40px 0;font-size:.9rem}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h1>🧰 SupportToolbox</h1>
+<p class="lead">Ein kleines Support-Tool für Windows. Kunden führen die lästigen Standardaufgaben per Klick selbst aus – das Ergebnis geht mit einem weiteren Klick per Mail an den Support.</p>
+<a class="btn" href="https://github.com/fmatsch/SupportToolbox/archive/refs/heads/main.zip">⬇ ZIP herunterladen</a>
+<a class="btn alt" href="https://github.com/fmatsch/SupportToolbox">Quellcode auf GitHub</a>
+</header>
+
+<img class="shot" src="screenshot.png" alt="Screenshot der SupportToolbox mit Aktionsliste links und Ausgabe rechts">
+
+<h2>Funktionen</h2>
+<div class="grid">
+<div class="card"><h3>💻 Computer-Daten</h3><p>Modell, Seriennummer, Windows-Version, CPU, RAM, Laufwerke, Netzwerk und Virenschutz – direkt als Mail verschickbar.</p></div>
+<div class="card"><h3>⚠️ Letzte Fehlermeldung</h3><p>Zeigt den neuesten Fehler aus dem Windows-Ereignisprotokoll im Klartext.</p></div>
+<div class="card"><h3>🔎 Fehleranalyse mit Tipps</h3><p>Erkennt bekannte Fehlermuster der letzten 14 Tage und gibt Hilfe zur Selbsthilfe. Prüft zusätzlich Speicherplatz, Neustart-Bedarf und RAM.</p></div>
+<div class="card"><h3>🔄 IP erneuern</h3><p><code>ipconfig /release</code>, <code>/renew</code> und DNS-Cache leeren in einem Schritt.</p></div>
+<div class="card"><h3>📡 Verbindungstest</h3><p>Router → Internet → DNS → Ping → Port zu Ihrem Server – mit verständlicher Diagnose, wo es hakt.</p></div>
+<div class="card"><h3>🔌 WLAN → Ethernet</h3><p>Schaltet das WLAN ab, sobald ein Netzwerkkabel verbunden ist – und bei Bedarf wieder an.</p></div>
+<div class="card"><h3>🗂️ Netzlaufwerke</h3><p>Verbindet getrennte Laufwerke neu und prüft vorher, ob der Server erreichbar ist (VPN!).</p></div>
+<div class="card"><h3>📸 Screenshots</h3><p>Sofort oder mit 5 Sekunden Verzögerung – als Datei und in der Zwischenablage.</p></div>
+<div class="card"><h3>🛠️ Schnelle Reparaturen</h3><p>Druckwarteschlange leeren, Temp-Dateien löschen, Explorer neu starten, Windows-Schnellhilfe für die Fernwartung.</p></div>
+</div>
+
+<h2>So geht's</h2>
+<ol>
+<li>ZIP herunterladen und entpacken.</li>
+<li><code>Start.bat</code> doppelklicken – keine Installation nötig.</li>
+<li>Für IP erneuern, WLAN-Umschaltung und Druckdienst: <em>Als Administrator neu starten</em> klicken.</li>
+</ol>
+
+<h2>Anpassen</h2>
+<p>Mit einer <code>config.json</code> neben dem Skript legen Sie Ihre Support-Adresse, den Test-Server und Netzlaufwerke fest:</p>
+<pre>{
+  "CompanyName": "Mein IT-Support",
+  "SupportMail": "support@meine-firma.de",
+  "TestHost": "server.meine-firma.de",
+  "TestPort": 443
+}</pre>
+
+<footer>Open Source unter MIT-Lizenz · Läuft mit Windows PowerShell 5.1 (Windows 10/11) · Es werden keine Daten ins Internet gesendet.</footer>
+</div>
+</body>
+</html>

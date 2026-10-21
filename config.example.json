@@ -1,0 +1,9 @@
+{
+  "CompanyName": "Mein IT-Support",
+  "SupportMail": "support@meine-firma.de",
+  "TestHost": "server.meine-firma.de",
+  "TestPort": 443,
+  "NetworkDrives": [
+    { "Letter": "Z", "Path": "\\\\server\\daten" }
+  ]
+}
