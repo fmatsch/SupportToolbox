@@ -21,7 +21,7 @@ $ProgressPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:Version = '1.1.1'
+$script:Version = '1.1.2'
 $script:SelfPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $script:IsExe = $script:SelfPath -notmatch '(?i)\\(powershell|pwsh)\.exe$'
 $script:Root = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $script:SelfPath }
@@ -708,6 +708,11 @@ $f.StartPosition = 'CenterScreen'
 $f.Size = New-Object System.Drawing.Size(1080, 800)
 $f.MinimumSize = New-Object System.Drawing.Size(900, 560)
 $f.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+try {
+    $iconBytes = [Convert]::FromBase64String('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')
+    $iconBmp = New-Object System.Drawing.Bitmap((New-Object System.IO.MemoryStream(,$iconBytes)))
+    $f.Icon = [System.Drawing.Icon]::FromHandle($iconBmp.GetHicon())
+} catch { }
 
 $script:Txt = New-Object System.Windows.Forms.TextBox
 $script:Txt.Multiline = $true; $script:Txt.ReadOnly = $true; $script:Txt.ScrollBars = 'Both'; $script:Txt.WordWrap = $false

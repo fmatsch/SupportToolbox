@@ -1,3 +1,5 @@
+<img src="assets/icon.png" alt="" width="96" align="right">
+
 # SupportToolbox
 
 Kleines Support-Tool für Windows-Anwender: Der Kunde startet es per Doppelklick und führt damit die lästigen Standardaufgaben selbst aus – das Ergebnis lässt sich mit einem Klick per Mail an den Support schicken.
