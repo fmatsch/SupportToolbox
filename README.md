@@ -24,7 +24,7 @@ Kleines Support-Tool für Windows-Anwender: Der Kunde startet es per Doppelklick
 
 ## Benutzung
 
-1. ZIP herunterladen und entpacken (**Code → Download ZIP**, oder aus den Releases).
+1. **Einfachste Variante:** `SupportToolbox.exe` aus den [Releases](https://github.com/fmatsch/SupportToolbox/releases/latest) laden und doppelklicken (eine `config.json` daneben legen ist optional). Alternativ: ZIP laden und `Start.bat` starten.
 2. `Start.bat` doppelklicken. Für IP erneuern, WLAN umschalten und Druckerdienst wird Administratorrecht benötigt – dafür gibt es links unten den Button **Als Administrator neu starten**.
 
 Voraussetzung: Windows 10/11 mit Windows PowerShell 5.1 (ist enthalten). Keine Installation, keine Abhängigkeiten, es wird nichts ins Internet gesendet.
@@ -51,6 +51,7 @@ Eigene Fehlermuster für die Analyse lassen sich in `SupportToolbox.ps1` in der 
 
 ## Hinweise
 
+- Die .exe wird mit `build.ps1` (ps2exe) aus dem Skript gebaut und ist nicht signiert - Windows SmartScreen oder Virenscanner können deshalb warnen (Weitere Informationen > Trotzdem ausführen).
 - Das Skript ist unsigniert. `Start.bat` startet PowerShell mit `-ExecutionPolicy Bypass`, damit es auch aus einer heruntergeladenen ZIP läuft.
 - Die Mail enthält Computername, Benutzername und Seriennummer – bitte den Kunden vor dem Senden informieren.
 - Tests ohne Oberfläche: `. .\SupportToolbox.ps1 -NoGui` lädt nur die Funktionen (z. B. `Get-SpecsText`).

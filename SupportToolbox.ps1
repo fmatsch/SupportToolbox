@@ -22,7 +22,9 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:Version = '1.0.0'
-$script:Root = $PSScriptRoot
+$script:SelfPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$script:IsExe = $script:SelfPath -notmatch '(?i)\\(powershell|pwsh)\.exe$'
+$script:Root = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $script:SelfPath }
 $script:IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 # ---------------------------------------------------------------- Konfiguration
@@ -605,7 +607,8 @@ if (-not $script:IsAdmin) {
     $adm.BackColor = [System.Drawing.Color]::FromArgb(255, 244, 214); $adm.FlatStyle = 'Flat'
     $adm.Add_Click({
         try {
-            Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+            if ($script:IsExe) { Start-Process $script:SelfPath -Verb RunAs }
+            else { Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
             $script:Form.Close()
         } catch { }
     })
